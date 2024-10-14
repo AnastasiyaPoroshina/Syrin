@@ -1,0 +1,155 @@
+
+library(poppr)
+library(vegan)
+library(ape)
+Sys.setlocale("LC_CTYPE", "russian")
+
+setwd("E:\\Микросателиты_губок\\История численнсти популяции\\")
+
+pop<-read.table("pop.txt", header=T,sep="\t")
+
+D<-read.structure("mikrosat_table_Fst.str", n.ind=251, n.loc=10, onerowperind=FALSE, col.lab=0, col.pop=2, col.others=0, row.marknames=0, NA.char="-9")
+
+popdata<-poppr(D)
+popdata
+
+set.seed(9999)
+
+n_rep<-5000
+n_int=400
+d_rep<-list()
+pb <- txtProgressBar(min=0, max=n_rep, style = 3)
+for(i in 1:n_rep)
+ {
+  d_rep[[i]]<-as.matrix(bruvo.dist(shufflepop(D, method = 1), replen=c(2, 2, 2, 2, 2, 2, 2, 2, 2, 2)))
+  setTxtProgressBar(pb, i)
+ }
+close(pb)
+
+
+
+
+#/////////////анализ популяций
+
+trees<-list()
+trees_length<-rep(0, n_rep)
+
+pop_number<-8
+pb <- txtProgressBar(min=0, max=n_rep, style = 3)
+for(i in 1:n_rep)
+ {
+  d_p<-as.dist(d_rep[[i]][which(pop$pop==pop_number), which(pop$pop==pop_number)])
+  #d_p<-as.dist(d_rep[[i]])
+  fit<-upgma(d_p)
+  trees[[i]]<-fit
+  root_number<-nodepath(fit)[[1]][1]
+  trees_length[i]<-dist.nodes(fit)[root_number, 1]
+  setTxtProgressBar(pb, i)
+ }
+close(pb)
+
+d_mean<-mean(trees_length)
+
+pop_size<-list()
+pop_time<-list()
+
+pb <- txtProgressBar(min=0, max=n_rep, style = 3)
+for(i in 1:n_rep)
+ {
+  ci<-coalescent.intervals(trees[[i]])
+  sk<-skyline(ci, find.skyline.epsilon(ci, GRID=1000, MINEPS=1e-6))
+  size<-sk$population.size
+  time<-sk$time
+  size<-c(size[1], size)
+  time<-c(0, time)
+  if(time[length(time)]<d_mean)
+   {
+    size<-c(size, 0)
+	time<-c(time, d_mean)
+   }
+  if(time[length(time)]>d_mean)
+   {
+    n<-which(abs(time-d_mean)==min(abs(time-d_mean)))
+	if((time[n]-d_mean)<0)
+	 {
+	  size<-c(size[1:n], size[n+1])
+	  time<-c(time[1:n], d_mean)
+	 } 
+	if((time[n]-d_mean)>0)
+	 {
+	  time[n]<-d_mean
+	 }  
+   }   
+  setTxtProgressBar(pb, i)
+  
+  p_time<-seq(0, d_mean, d_mean/(n_int-1))
+  p_size<-rep(0, length(p_time))
+  for(j in 1:length(time))
+   {
+    n<-which(p_time>=time[j])
+    p_size[n]<-size[j]
+   } 
+
+  pop_time[[i]]<-p_time
+  pop_size[[i]]<-p_size
+ }
+close(pb)
+
+pop_size<-do.call(rbind.data.frame, pop_size)
+colnames(pop_size)<-pop_time[[1]]
+
+
+pop_0.975<-rep(0, n_int)
+pop_median<-rep(0, n_int)
+pop_0.025<-rep(0, n_int)
+p_time<-pop_time[[1]]
+
+pb<-txtProgressBar(min=1, max=ncol(pop_size), style = 3)
+for(i in 1:ncol(pop_size))
+ {
+  x<-pop_size[,i]
+  x<-x[x!=0]
+  pop_0.975[i]<-quantile(x, 0.975)
+  pop_median[i]<-quantile(x, 0.5)
+  pop_0.025[i]<-quantile(x, 0.025)
+  setTxtProgressBar(pb, i)
+ }
+close(pb)
+
+#графики скайплота без сглаживания
+plot(p_time, pop_0.975, xlim=c(0, 0.31), typ="n")
+#plot(p_time, pop_0.975, typ="n")
+polygon(c(rev(p_time), p_time), c(rev(pop_0.975), pop_0.025), col = 'grey80', border = NA)
+lines(pop_0.975, x=p_time, lty=1, lwd=2, col="red")
+lines(pop_median, x=p_time, lty=1, lwd=2, col="red")
+lines(pop_0.025, x=p_time, lty=1, lwd=2, col="red")
+
+rez<-data.frame(time=p_time, pop_0.025=pop_0.025, pop_median=pop_median, pop_0.975=pop_0.975)
+
+write.table(rez, "skyline_pop_1.txt", quote=F, row.names=F, col.names=T, sep = "\t")
+
+#///////////////////
+
+
+loessMod_0.975<-loess(pop_0.975 ~ p_time, span=0.075)
+loessMod_0.975<-predict(loessMod_0.975)
+loessMod_median<-loess(pop_median ~ p_time, span=0.075)
+loessMod_median<-predict(loessMod_median)
+loessMod_0.025<-loess(pop_0.025 ~ p_time, span=0.075)
+loessMod_0.025<-predict(loessMod_0.025)
+
+#графики производных со сгаживанием
+plot( p_time, loessMod_0.975, typ="n")
+polygon(c(rev(p_time), p_time), c(rev(loessMod_0.975), loessMod_0.025), col = 'grey80', border = NA)
+lines(loessMod_0.975, x=p_time, lty=2, lwd=2, col="red")
+lines(loessMod_median, x=p_time, lty=1, lwd=2, col="red")
+lines(loessMod_0.025, x=p_time, lty=2, lwd=2, col="red")
+
+#графики производных без сглаживания
+plot(p_time, pop_0.975, typ="n")
+polygon(c(rev(p_time), p_time), c(rev(pop_0.975), pop_0.025), col = 'grey80', border = NA)
+lines(pop_0.975, x=p_time, lty=2, lwd=2, col="red")
+lines(pop_median, x=p_time, lty=1, lwd=2, col="red")
+lines(pop_0.025, x=p_time, lty=2, lwd=2, col="red")
+
+
